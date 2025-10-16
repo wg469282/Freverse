@@ -77,7 +77,7 @@ $ ./freverse large_dataset.bin
 
 - **Performance Edge**: Demonstrates mastery of low-level optimizations critical for high-frequency data applications.  
 - **Code Quality**: Exemplifies rigorous assembly formatting, extensive commentary, and maintainable structure.  
-- **Scalable Design**: Suitable for high-throughput environments at FAANG-scale data centers.  
+- **Scalable Design**: Suitable for high-throughput environments .  
 - **Reliability**: Meets enterprise standards for error handling and silent operation, ideal for automated deployment.
 
 ---
