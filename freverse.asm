@@ -1,132 +1,151 @@
+freverse-english
 ; =============================================================================
 ; Program: freverse.asm
 ; -----------------------------------------------------------------------------
-; Cel: Odwraca zawartość pliku w miejscu (bez tworzenia pliku tymczasowego).
+; Goal: Reverses file contents in place (without creating a temporary file).
 ; 
-; Użycie: ./freverse <nazwa_pliku>
+; Usage: ./freverse <filename>
 ;
-; Działanie:
-; - Mapuje plik do pamięci za pomocą mmap
-; - Wykorzystuje optymalizację poprzez pracę na 16-bajtowych blokach
-; - Odwraca kolejność bajtów używając instrukcji bswap dla bloków 8-bajtowych
-; - Pozostałe bajty są odwracane pojedynczo
+; Operation:
+; - Maps file to memory using mmap
+; - Uses optimization by working on 16-byte blocks
+; - Reverses byte order using bswap instruction for 8-byte blocks
+; - Remaining bytes are reversed individually
 ; =============================================================================
+
 
 section .text
 global _start
 
+
 _start:
-    ; Pobranie liczby argumentów (argc) ze stosu
-    pop rax             ; RAX = argc (liczba argumentów)
-    cmp al, 2           ; Sprawdzenie czy podano dokładnie 1 argument 
-    jne exit_error      ; Jeśli nie, wyjście z błędem
+    ; Get number of arguments (argc) from stack
+    pop rax             ; RAX = argc (number of arguments)
+    cmp al, 2           ; Check if exactly 1 argument was provided 
+    jne exit_error      ; If not, exit with error
 
-    ; Pobranie nazwy pliku ze stosu
-    pop rdi             ; Ignorujemy nazwę programu
-    pop rdi             ; RDI = wskaźnik na nazwę pliku
 
-    ; Otwarcie pliku
-    mov eax, 2          ; sys_open (32-bitowy rejestr)
-    mov esi, 2          ; O_RDWR - tryb odczytu i zapisu
-    syscall             ; Wywołanie systemowe
-    test eax, eax       ; Sprawdzenie czy deskryptor pliku jest poprawny
-    js exit_error       ; Jeśli znacznik SF=1 (błąd), wyjście z błędem
-    mov r13d, eax       ; Zapis deskryptora pliku w R13D (32-bit)
+    ; Get filename from stack
+    pop rdi             ; Ignore program name
+    pop rdi             ; RDI = pointer to filename
 
-    ; Pobranie rozmiaru pliku przez fstat
+
+    ; Open file
+    mov eax, 2          ; sys_open (32-bit register)
+    mov esi, 2          ; O_RDWR - read and write mode
+    syscall             ; System call
+    test eax, eax       ; Check if file descriptor is valid
+    js exit_error       ; If SF flag=1 (error), exit with error
+    mov r13d, eax       ; Save file descriptor in R13D (32-bit)
+
+
+    ; Get file size via fstat
     mov eax, 5          ; sys_fstat
-    mov edi, r13d       ; Deskryptor pliku
-    lea rsi, [rel stat_buf]   ; Wskaźnik na strukturę stat (adresowanie względne)
+    mov edi, r13d       ; File descriptor
+    lea rsi, [rel stat_buf]   ; Pointer to stat structure (relative addressing)
     syscall
-    test eax, eax       ; Sprawdzenie błędów
-    js close_exit       ; Jeśli błąd, zamknij plik i wyjdź
+    test eax, eax       ; Check for errors
+    js close_exit       ; If error, close file and exit
 
-    mov r14, [rel stat_buf + 48] ; Pobranie rozmiaru pliku 
-    cmp r14, 2          ; Sprawdzenie minimalnego rozmiaru pliku
-    jl close_file       ; Jeśli plik < 2 bajtów, od razu zamykamy
 
-    ; Mapowanie pliku do pamięci
+    mov r14, [rel stat_buf + 48] ; Get file size 
+    cmp r14, 2          ; Check minimum file size
+    jl close_file       ; If file < 2 bytes, close 
+
+
+    ; Map file to memory
     mov eax, 9          ; sys_mmap
-    xor edi, edi        ; Automatyczne przydzielenie adresu
-    mov rsi, r14        ; Rozmiar mapowania = rozmiar pliku
-    mov edx, 3          ; PROT_READ|PROT_WRITE - dostęp do pamięci
-    mov r10d, 1         ; MAP_SHARED - zmiany widoczne w pliku
-    mov r8d, r13d       ; Deskryptor pliku
+    xor edi, edi        ; Automatic address allocation
+    mov rsi, r14        ; Mapping size = file size
+    mov edx, 3          ; PROT_READ|PROT_WRITE - memory access
+    mov r10d, 1         ; MAP_SHARED - changes visible in file
+    mov r8d, r13d       ; File descriptor
     xor r9d, r9d        ; Offset = 0
     syscall
-    cmp rax, -4096      ; Sprawdzenie błędów (zwracane wartości > -4095)
-    jae close_exit      ; Jeśli błąd, posprzątaj i wyjdź
+    cmp rax, -4096      ; Check for errors (returned values > -4095)
+    jae close_exit      ; If error, clean up and exit
 
-    ; Inicjalizacja wskaźników do odwracania
-    mov r15, rax        ; Zachowaj adres mapowania w R15
-    mov rdi, rax        ; RDI = początek bufora
-    lea rsi, [rax + r14 - 1] ; RSI = koniec bufora (adres ostatniego bajtu)
 
-    ; Główna pętla odwracania - praca na 16-bajtowych blokach
-    mov rcx, r14        ; RCX = rozmiar pliku
-    shr rcx, 4          ; Liczba pełnych 16-bajtowych bloków
-    jz .remainder       ; Jeśli brak pełnych bloków, przejdź do reszty
+    ; Initialize pointers for reversal
+    mov r15, rax        ; Save mapping address in R15
+    mov rdi, rax        ; RDI = buffer start
+    lea rsi, [rax + r14 - 1] ; RSI = buffer end (address of last byte)
+
+
+    ; Main reversal loop - working on 16-byte blocks
+    mov rcx, r14        ; RCX = file size
+    shr rcx, 4          ; Number of full 16-byte blocks
+    jz .remainder       ; If no full blocks, go to remainder
+
 
 .block_loop:
-    ; Odwracanie kolejności bajtów w 16-bajtowym bloku
-    mov rax, [rdi]      ; Pierwsze 8 bajtów
-    mov rbx, [rsi-7]    ; Ostatnie 8 bajtów (rsi-7 = rsi-8+1)
-    bswap rax           ; Odwrócenie kolejności bajtów w RAX
-    bswap rbx           ; Odwrócenie kolejności bajtów w RBX
-    mov [rdi], rbx      ; Zamiana miejscami bloków 8-bajtowych
+    ; Reverse byte order in 16-byte block
+    mov rax, [rdi]      ; First 8 bytes
+    mov rbx, [rsi-7]    ; Last 8 bytes (rsi-7 = rsi-8+1)
+    bswap rax           ; Reverse byte order in RAX
+    bswap rbx           ; Reverse byte order in RBX
+    mov [rdi], rbx      ; Swap 8-byte blocks
     mov [rsi-7], rax
-    add rdi, 8          ; Przesunięcie wskaźnika początku w prawo
-    sub rsi, 8          ; Przesunięcie wskaźnika końca w lewo
-    dec rcx             ; Licznik bloków
-    jnz .block_loop     ; Kontynuuj aż do przerobienia wszystkich bloków
+    add rdi, 8          ; Move start pointer right
+    sub rsi, 8          ; Move end pointer left
+    dec rcx             ; Block counter
+    jnz .block_loop     ; Continue until all blocks processed
+
 
 .remainder:
-    ; Obsługa pozostałych bajtów (dla rozmiarów niepodzielnych przez 16)
-    cmp rdi, rsi        ; Sprawdzenie czy wskaźniki się minęły
-    jge .cleanup        ; Jeśli tak, zakończ
+    ; Handle remaining bytes (for sizes not divisible by 16)
+    cmp rdi, rsi        ; Check if pointers crossed
+    jge .cleanup        ; If so, finish
+
 
 .byte_loop:
-    ; Odwracanie pojedynczych bajtów
-    mov al, [rdi]       ; Bajt z początku
-    mov bl, [rsi]       ; Bajt z końca
-    mov [rdi], bl       ; Zamiana miejsc
+    ; Reverse individual bytes
+    mov al, [rdi]       ; Byte from start
+    mov bl, [rsi]       ; Byte from end
+    mov [rdi], bl       ; Swap places
     mov [rsi], al
-    inc rdi             ; Przesuń wskaźnik początku w prawo
-    dec rsi             ; Przesuń wskaźnik końca w lewo
-    cmp rdi, rsi        ; Sprawdź czy trzeba kontynuować
+    inc rdi             ; Move start pointer right
+    dec rsi             ; Move end pointer left
+    cmp rdi, rsi        ; Check if need to continue
     jl .byte_loop
 
+
 .cleanup:
-    ; Zwolnienie zasobów
+    ; Free resources
     mov eax, 11         ; sys_munmap
-    mov rdi, r15        ; Adres mapowania z R15
-    mov rsi, r14        ; Rozmiar mapowania
+    mov rdi, r15        ; Mapping address from R15
+    mov rsi, r14        ; Mapping size
     syscall
+
 
 close_file:
-    ; Zamknięcie pliku
+    ; Close file
     mov eax, 3          ; sys_close
-    mov edi, r13d       ; Deskryptor pliku
+    mov edi, r13d       ; File descriptor
     syscall
+
 
 exit:
-    ; Poprawne zakończenie programu
+    ; Proper program termination
     mov eax, 60         ; sys_exit
-    xor edi, edi        ; Kod wyjścia 0
+    xor edi, edi        ; Exit code 0
     syscall
 
+
 close_exit:
-    ; Obsługa błędów z zamknięciem pliku
+    ; Error handling with file close
     mov eax, 3
     mov edi, r13d
     syscall
 
+
 exit_error:
-    ; Wyjście z błędem
+    ; Exit with error
     mov rax, 60             ; sys_exit
-    mov rdi, 1              ; kod wyjścia = 1
+    mov rdi, 1              ; exit code = 1
     syscall
 
 
+
 section .bss
-    stat_buf resb 144  ; Bufor dla struktury stat
+    stat_buf resb 144  ; Buffer for stat structure
